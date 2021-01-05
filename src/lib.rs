@@ -27,7 +27,9 @@ pub fn set_window_close(window: &gtk::Window) {
 }
 
 #[derive(Debug, Clone)]
-enum WhoisError {
+enum GetOwnerError {
+    QueryWhois,
+    ReadWhoisText,
     ParseXML,
     ParseRegistrant,
     ParseOrganisation,
@@ -43,19 +45,20 @@ fn descend_xml_tree<'a, 'b, 'c, 'd>(node: roxmltree::Node<'c, 'd>, child_tagname
     }
 }
 
-fn get_domain_owner(curr_url: &Url) -> Result<String, WhoisError> {
-    let _host = curr_url.host_str().unwrap_or("");
+fn get_domain_owner(curr_url: &Url) -> Result<String, GetOwnerError> {
+    let host = curr_url.host_str().unwrap_or("");
 
-    //https://www.whoisxmlapi.com/whoisserver/WhoisService?apiKey=&domainName=google.com
-    // Todo, perform web request
-    let xml_res = include_str!("tmp");
+    let query_url = format!("https://www.whoisxmlapi.com/whoisserver/WhoisService?apiKey={}&domainName={}", include_str!("whoisapi.key"), host);
 
-    let doc = roxmltree::Document::parse(xml_res).or(Err(WhoisError::ParseXML))?;
+    let res = reqwest::blocking::get(&query_url).or(Err(GetOwnerError::QueryWhois))?;
+    let xml_data = res.text().or(Err(GetOwnerError::ReadWhoisText))?;
 
-    let registrant = descend_xml_tree(doc.root(), "registrant").ok_or(WhoisError::ParseRegistrant)?;
-    let organisation = descend_xml_tree(registrant, "organization").ok_or(WhoisError::ParseOrganisation)?;
+    let doc = roxmltree::Document::parse(&xml_data).or(Err(GetOwnerError::ParseXML))?;
 
-    organisation.text().map(|s| String::from(s)).ok_or(WhoisError::NoOrganisation)
+    let registrant = descend_xml_tree(doc.root(), "registrant").ok_or(GetOwnerError::ParseRegistrant)?;
+    let organisation = descend_xml_tree(registrant, "organization").ok_or(GetOwnerError::ParseOrganisation)?;
+
+    organisation.text().map(|s| String::from(s)).ok_or(GetOwnerError::NoOrganisation)
 }
 
 
