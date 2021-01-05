@@ -1,8 +1,8 @@
-extern crate gtk;
-
 use gtk::prelude::*;
 
-use lazy_static::lazy_static; // 1.4.0
+use harvardciter2::*;
+
+use lazy_static::lazy_static;
 use std::sync::Mutex;
 
 
@@ -12,18 +12,6 @@ lazy_static! {
     static ref CURR_PROJ_NAME: Mutex<String> = Mutex::new(String::from("error"));
 }
 
-
-fn show_screen(b: &gtk::Builder, screen_name: &str) {
-    let w: gtk::Window = b.get_object(screen_name).unwrap();
-    w.show_all();
-}
-
-fn set_window_close(window: &gtk::Window) {
-    window.connect_delete_event(|_, _| {
-        gtk::main_quit();
-        Inhibit(false)
-    });
-}
 
 fn setup_title_screen(b: &gtk::Builder) {
     let window: gtk::Window = b.get_object("title_window").unwrap();
@@ -102,6 +90,52 @@ fn setup_project_screen(b: &gtk::Builder) {
     });
 }
 
+
+fn setup_reference_screen(b: &gtk::Builder) {
+    let window: gtk::Window = b.get_object("reference_window").unwrap();
+    let url: gtk::Entry = b.get_object("url_entry").unwrap();
+    let author: gtk::Entry = b.get_object("author_entry").unwrap();
+    let year: gtk::Entry = b.get_object("year_entry").unwrap();
+    let page: gtk::Entry = b.get_object("page_entry").unwrap();
+    let site: gtk::Entry = b.get_object("site_entry").unwrap();
+    let accessed: gtk::Entry = b.get_object("accessed_entry").unwrap();
+
+    let guess_button: gtk::Button = b.get_object("guess_fields").unwrap();
+    let set_today_button: gtk::Button = b.get_object("set_today").unwrap();
+
+    accessed.set_text(curr_time().as_str());
+
+    set_today_button.connect_clicked(move |_| {
+        accessed.set_text(curr_time().as_str());
+    });
+
+    let fail: gtk::MessageDialog = b.get_object("fail_guess_dialog").unwrap();
+    let fail_close_button: gtk::Button = b.get_object("close_fail_guess").unwrap();
+
+    let fail2 = fail.clone();
+
+    guess_button.connect_clicked(move |_| {
+        let results = guess_from_url(&url.get_text());
+
+        match results {
+            Ok(guesses) => {
+                author.set_text(&guesses.author);
+                year.set_text(&guesses.year);
+                page.set_text(&guesses.page);
+                site.set_text(&guesses.site);
+            }
+            Err(_) => {
+                // Todo; better error messages
+                fail2.show_all();
+            }
+        };
+    });
+
+    fail_close_button.connect_clicked(move |_| {
+        fail.hide();
+    });
+}
+
 fn main() {
     if gtk::init().is_err() {
         println!("Failed to initialize GTK.");
@@ -114,6 +148,7 @@ fn main() {
     setup_title_screen(&builder);
     setup_new_screen(&builder);
     setup_project_screen(&builder);
+    setup_reference_screen(&builder);
 
     show_screen(&builder, "title_window");
 
