@@ -3,9 +3,10 @@ use gtk::prelude::*;
 
 use url::Url;
 
-use roxmltree::{self, Node};
+use roxmltree;
 
 use reqwest::{self, header::{LAST_MODIFIED, DATE}};
+use html_parser::{Dom, Element, Node};
 
 pub fn curr_time() -> String {
     let now = chrono::offset::Local::now();
@@ -33,8 +34,8 @@ enum WhoisError {
     NoOrganisation
 }
 
-fn descend_xml_tree<'a, 'b, 'c, 'd>(node: Node<'c, 'd>, child_tagname: &'b str) -> Option<Node<'c, 'd>> {
-    let descendants: Vec<Node> = node.descendants().filter(|node| { node.tag_name().name() == child_tagname }).collect();
+fn descend_xml_tree<'a, 'b, 'c, 'd>(node: roxmltree::Node<'c, 'd>, child_tagname: &'b str) -> Option<roxmltree::Node<'c, 'd>> {
+    let descendants: Vec<roxmltree::Node> = node.descendants().filter(|node| { node.tag_name().name() == child_tagname }).collect();
 
     match descendants.len() {
         1 => Some(descendants[0]),
@@ -42,7 +43,7 @@ fn descend_xml_tree<'a, 'b, 'c, 'd>(node: Node<'c, 'd>, child_tagname: &'b str) 
     }
 }
 
-fn get_domain_owner(curr_url: Url) -> Result<String, WhoisError> {
+fn get_domain_owner(curr_url: &Url) -> Result<String, WhoisError> {
     let _host = curr_url.host_str().unwrap_or("");
 
     //https://www.whoisxmlapi.com/whoisserver/WhoisService?apiKey=&domainName=google.com
@@ -61,8 +62,10 @@ fn get_domain_owner(curr_url: Url) -> Result<String, WhoisError> {
 #[derive(Debug, Clone)]
 pub enum GuessError {
     UrlParse,
-    RequestError,
-    DecodingError
+    Request,
+    Decoding,
+    DomParsing,
+    NoDomain
 }
 
 pub struct Guesses {
@@ -72,10 +75,50 @@ pub struct Guesses {
     pub site: String
 }
 
+fn search_for_title_element(el: &Element) -> Option<String> {
+    if el.name.to_lowercase() == "title" {
+        let title_txt = el.children.iter().filter_map(|c| {
+            if let Node::Text(txt) = c {
+                Some(txt)
+            } else {
+                None
+            }
+        }).map(|s| s.as_str());
+        let title_txt = title_txt.collect::<Vec<&str>>().join(" ");
+        Some(title_txt)
+    } else {
+        el.children.iter().filter_map(|node| {
+            if let Node::Element(el) = node {
+                search_for_title_element(el)
+            } else {
+                None
+            }
+        }).next()
+    }
+}
+
+fn search_for_title(dom: Dom) -> Option<String> {
+    dom.children.iter().filter_map(|node| {
+        if let Node::Element(el) = node {
+            search_for_title_element(el)
+        } else {
+            None
+        }
+    }).next()
+}
+
+fn upper_first_letter(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().chain(c).collect(),
+    }
+}
+
 pub fn guess_from_url(raw_url: &str) -> Result<Guesses, GuessError> {
     let url = Url::parse(raw_url).or(Err(GuessError::UrlParse))?;
 
-    let res = reqwest::blocking::get(raw_url).or(Err(GuessError::RequestError))?;
+    let res = reqwest::blocking::get(raw_url).or(Err(GuessError::Request))?;
 
     // Year
     let headers = res.headers();
@@ -91,19 +134,24 @@ pub fn guess_from_url(raw_url: &str) -> Result<Guesses, GuessError> {
     let year = year.map(|y| String::from(y)).unwrap_or(chrono::Local::now().year().to_string());
 
     // Page title
-    // let txt = res.text().or(Err(GuessError::DecodingError))?;
-
+    let txt = res.text().or(Err(GuessError::Decoding))?;
+    let dom = Dom::parse(&txt).or(Err(GuessError::DomParsing))?;
+    let page_title = search_for_title(dom).unwrap_or(String::from("unknown title"));
 
     // Site title
+    let domain = url.domain().ok_or(GuessError::NoDomain)?;
+    let site_title = domain.split('.').filter(|domain_part| {
+        !include_str!("subdomains.txt").split('\n').collect::<Vec<_>>().contains(domain_part)
+    }).next().unwrap_or("");
+    let site_title = upper_first_letter(site_title);
 
     // Author
-    //todo implement backup using site title if whois fails
-    let domain_owner = get_domain_owner(url).unwrap_or(String::from("fail"));
+    let domain_owner = get_domain_owner(&url).unwrap_or(site_title.clone());
 
     Ok(Guesses {
         author: domain_owner,
         year: year,
-        page: String::from("TODO"),
-        site: String::from("TODO")
+        page: page_title,
+        site: site_title
     })
 }
